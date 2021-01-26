@@ -573,17 +573,23 @@ static struct bif *parse_level0_xml(const char *xml,
       bool ok;
       bool direction_y = false;
       //g_debug("%s, tile1 %"PRId64" %"PRId64", tile2 %"PRId64" %"PRId64, (char *) direction, tile1_col, tile1_row, tile2_col, tile2_row);
-      if (!xmlStrcmp(direction, BAD_CAST DIRECTION_RIGHT) || !xmlStrcmp(direction, BAD_CAST DIRECTION_LEFT)) {
+      if (!xmlStrcmp(direction, BAD_CAST DIRECTION_RIGHT)) {
         // get left joint of right tile
-        struct tile *tile =
+        struct tile *tile2 =
           area->tiles[tile2_row * area->tiles_across + tile2_col];
-        joint = &tile->left;
+        joint = &tile2->left;
+        ok = (tile2_col == tile1_col + 1 && tile2_row == tile1_row);
+      } else if (!xmlStrcmp(direction, BAD_CAST DIRECTION_LEFT)) {
+        // get left joint of right tile
+        struct tile *tile1 =
+          area->tiles[tile1_row * area->tiles_across + tile1_col];
+        joint = &tile1->left;
         ok = (tile2_col == tile1_col + 1 && tile2_row == tile1_row);
       } else if (!xmlStrcmp(direction, BAD_CAST DIRECTION_UP)) {
         // get top joint of bottom tile
-        struct tile *tile =
+        struct tile *tile1 =
           area->tiles[tile1_row * area->tiles_across + tile1_col];
-        joint = &tile->top;
+        joint = &tile1->top;
         ok = (tile2_col == tile1_col && tile2_row == tile1_row - 1);
         direction_y = true;
       } else {

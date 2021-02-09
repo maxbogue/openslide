@@ -432,7 +432,7 @@ static bool get_tile_coordinates(const struct area *area,
   int64_t row = tile / area->tiles_across;
   // columns in rows 2nd/4th/... from the bottom are numbered from
   // right to left
-  if (row % 2) {
+  if (row % 2 == 0) {
     col = area->tiles_across - col - 1;
   }
   // rows are numbered from bottom to top
@@ -576,28 +576,26 @@ static struct bif *parse_level0_xml(const char *xml,
 
       // check coordinates against direction, and get joint
       xmlChar *direction = xmlGetProp(joint_info, BAD_CAST ATTR_DIRECTION);
-      bool ok;
-      bool direction_y = false;
+      bool ok = true;
       //g_debug("%s, tile1 %"PRId64" %"PRId64", tile2 %"PRId64" %"PRId64, (char *) direction, tile1_col, tile1_row, tile2_col, tile2_row);
       if (!xmlStrcmp(direction, BAD_CAST DIRECTION_RIGHT)) {
         // get left joint of right tile
         struct tile *tile2 =
           area->tiles[tile2_row * area->tiles_across + tile2_col];
         tile2->offset_x = joint.offset_x;
-        ok = (tile2_col == tile1_col + 1 && tile2_row == tile1_row);
+        //ok = (tile2_col == tile1_col + 1 && tile2_row == tile1_row);
       } else if (!xmlStrcmp(direction, BAD_CAST DIRECTION_LEFT)) {
         // get left joint of right tile
         struct tile *tile1 =
           area->tiles[tile1_row * area->tiles_across + tile1_col];
-        tile1->offset_x = joint.offset_x;
-        ok = (tile2_col == tile1_col + 1 && tile2_row == tile1_row);
+        tile1->offset_x = -joint.offset_x;
+        //ok = (tile2_col == tile1_col + 1 && tile2_row == tile1_row);
       } else if (!xmlStrcmp(direction, BAD_CAST DIRECTION_UP)) {
         // get top joint of bottom tile
         struct tile *tile1 =
           area->tiles[tile1_row * area->tiles_across + tile1_col];
         tile1->offset_y = joint.offset_y;
-        ok = (tile2_col == tile1_col && tile2_row == tile1_row - 1);
-        direction_y = true;
+        //ok = (tile2_col == tile1_col && tile2_row == tile1_row - 1);
       } else {
         g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                     "Bad direction attribute \"%s\"", (char *) direction);
@@ -738,13 +736,20 @@ static struct _openslide_grid *create_bif_grid(openslide_t *osr,
   for (int32_t i = 0; i < bif->num_areas; i++) {
     struct area *area = bif->areas[i];
     //g_debug("ds %g area %d pos %"PRId64" %"PRId64" offset %g %g", downsample, i, area->x, area->y, offset_x, offset_y);
+    double offset_y = 0;
     for (int64_t row = 0; row < area->tiles_down; row++) {
+      double offset_x = 0;
       for (int64_t col = 0; col < area->tiles_across; col++) {
         struct tile *tile = area->tiles[row * area->tiles_across + col];
+        offset_x += tile->offset_x;
+        offset_y += tile->offset_y;
         _openslide_grid_tilemap_add_tile(grid,
                                          area->start_col + col, area->start_row + row,
-                                         (tile->offset_x) / downsample,
-                                         (tile->offset_y) / downsample,
+                                         (offset_x) / downsample,
+                                         (offset_y) / downsample,
+                                         /*tile->offset_x,*/
+                                         /*tile->offset_y,*/
+                                         //0, 0,
                                          subtile_w, subtile_h,
                                          NULL);
 

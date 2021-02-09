@@ -129,8 +129,8 @@ struct joint {
 };
 
 struct tile {
-  struct joint left;
-  struct joint top;
+  double offset_x;
+  double offset_y;
 };
 
 static void destroy(openslide_t *osr) {
@@ -456,10 +456,6 @@ static struct bif *parse_level0_xml(const char *xml,
   xmlXPathObject *info_result = NULL;
   xmlXPathObject *origin_result = NULL;
   xmlXPathObject *result = NULL;
-  double total_offset_x = 0;
-  double total_offset_y = 0;
-  int64_t total_x_weight = 0;
-  int64_t total_y_weight = 0;
   bool success = false;
 
   // parse
@@ -567,9 +563,19 @@ static struct bif *parse_level0_xml(const char *xml,
         goto FAIL;
       }
 
+      struct joint joint;
+      // read values
+      PARSE_DOUBLE_ATTRIBUTE_OR_FAIL(joint_info, ATTR_OVERLAP_X,
+                                     joint.offset_x);
+      //joint.offset_x *= -1;
+      PARSE_DOUBLE_ATTRIBUTE_OR_FAIL(joint_info, ATTR_OVERLAP_Y,
+                                     joint.offset_y);
+      //joint.offset_y *= -1;
+      PARSE_INT_ATTRIBUTE_OR_FAIL(joint_info, ATTR_CONFIDENCE,
+                                  joint.confidence);
+
       // check coordinates against direction, and get joint
       xmlChar *direction = xmlGetProp(joint_info, BAD_CAST ATTR_DIRECTION);
-      struct joint *joint;
       bool ok;
       bool direction_y = false;
       //g_debug("%s, tile1 %"PRId64" %"PRId64", tile2 %"PRId64" %"PRId64, (char *) direction, tile1_col, tile1_row, tile2_col, tile2_row);
@@ -577,19 +583,19 @@ static struct bif *parse_level0_xml(const char *xml,
         // get left joint of right tile
         struct tile *tile2 =
           area->tiles[tile2_row * area->tiles_across + tile2_col];
-        joint = &tile2->left;
+        tile2->offset_x = joint.offset_x;
         ok = (tile2_col == tile1_col + 1 && tile2_row == tile1_row);
       } else if (!xmlStrcmp(direction, BAD_CAST DIRECTION_LEFT)) {
         // get left joint of right tile
         struct tile *tile1 =
           area->tiles[tile1_row * area->tiles_across + tile1_col];
-        joint = &tile1->left;
+        tile1->offset_x = joint.offset_x;
         ok = (tile2_col == tile1_col + 1 && tile2_row == tile1_row);
       } else if (!xmlStrcmp(direction, BAD_CAST DIRECTION_UP)) {
         // get top joint of bottom tile
         struct tile *tile1 =
           area->tiles[tile1_row * area->tiles_across + tile1_col];
-        joint = &tile1->top;
+        tile1->offset_y = joint.offset_y;
         ok = (tile2_col == tile1_col && tile2_row == tile1_row - 1);
         direction_y = true;
       } else {
@@ -598,6 +604,7 @@ static struct bif *parse_level0_xml(const char *xml,
         xmlFree(direction);
         goto FAIL;
       }
+
       if (!ok) {
         g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                     "Unexpected tile join: %s, "
@@ -608,25 +615,6 @@ static struct bif *parse_level0_xml(const char *xml,
         goto FAIL;
       }
       xmlFree(direction);
-
-      // read values
-      PARSE_DOUBLE_ATTRIBUTE_OR_FAIL(joint_info, ATTR_OVERLAP_X,
-                                     joint->offset_x);
-      joint->offset_x *= -1;
-      PARSE_DOUBLE_ATTRIBUTE_OR_FAIL(joint_info, ATTR_OVERLAP_Y,
-                                     joint->offset_y);
-      joint->offset_y *= -1;
-      PARSE_INT_ATTRIBUTE_OR_FAIL(joint_info, ATTR_CONFIDENCE,
-                                  joint->confidence);
-
-      // add to totals
-      if (direction_y) {
-        total_offset_y += joint->confidence * joint->offset_y;
-        total_y_weight += joint->confidence;
-      } else {
-        total_offset_x += joint->confidence * joint->offset_x;
-        total_x_weight += joint->confidence;
-      }
     }
     xmlXPathFreeObject(result);
     result = NULL;
@@ -648,8 +636,8 @@ FAIL:
   struct bif *bif = g_slice_new0(struct bif);
   bif->num_areas = area_array->len;
   bif->areas = (struct area **) g_ptr_array_free(area_array, false);
-  bif->tile_advance_x = tiff_tile_width + total_offset_x / total_x_weight;
-  bif->tile_advance_y = tiff_tile_height + total_offset_y / total_y_weight;
+  bif->tile_advance_x = tiff_tile_width;
+  bif->tile_advance_y = tiff_tile_height;
   //g_debug("advances: %g %g", bif->tile_advance_x, bif->tile_advance_y);
 
   // Fix area Y coordinates.  The Pos-Y read from the file is the distance
@@ -749,20 +737,17 @@ static struct _openslide_grid *create_bif_grid(openslide_t *osr,
 
   for (int32_t i = 0; i < bif->num_areas; i++) {
     struct area *area = bif->areas[i];
-    double offset_x =
-      (area->x - area->start_col * bif->tile_advance_x) / downsample;
-    double offset_y =
-      (area->y - area->start_row * bif->tile_advance_y) / downsample;
     //g_debug("ds %g area %d pos %"PRId64" %"PRId64" offset %g %g", downsample, i, area->x, area->y, offset_x, offset_y);
-    for (int64_t row = area->start_row;
-         row < area->start_row + area->tiles_down; row++) {
-      for (int64_t col = area->start_col;
-           col < area->start_col + area->tiles_across; col++) {
+    for (int64_t row = 0; row < area->tiles_down; row++) {
+      for (int64_t col = 0; col < area->tiles_across; col++) {
+        struct tile *tile = area->tiles[row * area->tiles_across + col];
         _openslide_grid_tilemap_add_tile(grid,
-                                         col, row,
-                                         offset_x, offset_y,
+                                         area->start_col + col, area->start_row + row,
+                                         (tile->offset_x) / downsample,
+                                         (tile->offset_y) / downsample,
                                          subtile_w, subtile_h,
                                          NULL);
+
       }
     }
   }

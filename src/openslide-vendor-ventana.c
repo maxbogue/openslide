@@ -432,7 +432,7 @@ static bool get_tile_coordinates(const struct area *area,
   int64_t row = tile / area->tiles_across;
   // columns in rows 2nd/4th/... from the bottom are numbered from
   // right to left
-  if (row % 2 == 0) {
+  if (row % 2) {
     col = area->tiles_across - col - 1;
   }
   // rows are numbered from bottom to top
@@ -567,35 +567,29 @@ static struct bif *parse_level0_xml(const char *xml,
       // read values
       PARSE_DOUBLE_ATTRIBUTE_OR_FAIL(joint_info, ATTR_OVERLAP_X,
                                      joint.offset_x);
-      //joint.offset_x *= -1;
+      joint.offset_x *= -1;
       PARSE_DOUBLE_ATTRIBUTE_OR_FAIL(joint_info, ATTR_OVERLAP_Y,
                                      joint.offset_y);
-      //joint.offset_y *= -1;
+      joint.offset_y *= -1;
       PARSE_INT_ATTRIBUTE_OR_FAIL(joint_info, ATTR_CONFIDENCE,
                                   joint.confidence);
 
       // check coordinates against direction, and get joint
       xmlChar *direction = xmlGetProp(joint_info, BAD_CAST ATTR_DIRECTION);
-      bool ok = true;
+      bool ok;
       //g_debug("%s, tile1 %"PRId64" %"PRId64", tile2 %"PRId64" %"PRId64, (char *) direction, tile1_col, tile1_row, tile2_col, tile2_row);
-      if (!xmlStrcmp(direction, BAD_CAST DIRECTION_RIGHT)) {
+      if (!xmlStrcmp(direction, BAD_CAST DIRECTION_RIGHT) || !xmlStrcmp(direction, BAD_CAST DIRECTION_LEFT)) {
         // get left joint of right tile
-        struct tile *tile2 =
+        struct tile *tile =
           area->tiles[tile2_row * area->tiles_across + tile2_col];
-        tile2->offset_x = joint.offset_x;
-        //ok = (tile2_col == tile1_col + 1 && tile2_row == tile1_row);
-      } else if (!xmlStrcmp(direction, BAD_CAST DIRECTION_LEFT)) {
-        // get left joint of right tile
-        struct tile *tile1 =
-          area->tiles[tile1_row * area->tiles_across + tile1_col];
-        tile1->offset_x = -joint.offset_x;
-        //ok = (tile2_col == tile1_col + 1 && tile2_row == tile1_row);
+        tile->offset_x = joint.offset_x;
+        ok = (tile2_col == tile1_col + 1 && tile2_row == tile1_row);
       } else if (!xmlStrcmp(direction, BAD_CAST DIRECTION_UP)) {
         // get top joint of bottom tile
-        struct tile *tile1 =
+        struct tile *tile =
           area->tiles[tile1_row * area->tiles_across + tile1_col];
-        tile1->offset_y = joint.offset_y;
-        //ok = (tile2_col == tile1_col && tile2_row == tile1_row - 1);
+        tile->offset_y = joint.offset_y;
+        ok = (tile2_col == tile1_col && tile2_row == tile1_row - 1);
       } else {
         g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                     "Bad direction attribute \"%s\"", (char *) direction);
@@ -750,9 +744,6 @@ static struct _openslide_grid *create_bif_grid(openslide_t *osr,
                                          area->start_col + col, area->start_row + row,
                                          (offset_x) / downsample,
                                          (offset_ys[col]) / downsample,
-                                         /*tile->offset_x,*/
-                                         /*tile->offset_y,*/
-                                         //0, 0,
                                          subtile_w, subtile_h,
                                          NULL);
 

@@ -736,17 +736,20 @@ static struct _openslide_grid *create_bif_grid(openslide_t *osr,
   for (int32_t i = 0; i < bif->num_areas; i++) {
     struct area *area = bif->areas[i];
     //g_debug("ds %g area %d pos %"PRId64" %"PRId64" offset %g %g", downsample, i, area->x, area->y, offset_x, offset_y);
-    double offset_y = 0;
+    double offset_ys[area->tiles_across];
+    for (int64_t col = 0; col < area->tiles_across; col++) {
+      offset_ys[col] = 0;
+    }
     for (int64_t row = 0; row < area->tiles_down; row++) {
       double offset_x = 0;
       for (int64_t col = 0; col < area->tiles_across; col++) {
         struct tile *tile = area->tiles[row * area->tiles_across + col];
         offset_x += tile->offset_x;
-        offset_y += tile->offset_y;
+        offset_ys[col] += tile->offset_y;
         _openslide_grid_tilemap_add_tile(grid,
                                          area->start_col + col, area->start_row + row,
                                          (offset_x) / downsample,
-                                         (offset_y) / downsample,
+                                         (offset_ys[col]) / downsample,
                                          /*tile->offset_x,*/
                                          /*tile->offset_y,*/
                                          //0, 0,

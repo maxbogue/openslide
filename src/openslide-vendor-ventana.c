@@ -51,6 +51,8 @@ static const char MAGNIFICATION_KEY[] = "mag";
 
 static const char INITIAL_XML_ISCAN[] = "iScan";
 static const char INITIAL_XML_ALT_ROOT[] = "Metadata";
+static const char PROP_SCANNER_MODEL[] = "ventana.ScannerModel";
+static const char SCANNER_MODEL_DP_200[] = "VENTANA DP 200";
 
 static const char ATTR_AOI_SCANNED[] = "AOIScanned";
 static const char ATTR_WIDTH[] = "Width";
@@ -450,12 +452,17 @@ FAIL:
 static struct bif *parse_level0_xml(const char *xml,
                                     int64_t tiff_tile_width,
                                     int64_t tiff_tile_height,
+                                    bool is_dp200,
                                     GError **err) {
   GPtrArray *area_array = g_ptr_array_new();
   xmlXPathContext *ctx = NULL;
   xmlXPathObject *info_result = NULL;
   xmlXPathObject *origin_result = NULL;
   xmlXPathObject *result = NULL;
+  double total_offset_x = 0;
+  double total_offset_y = 0;
+  int64_t total_x_weight = 0;
+  int64_t total_y_weight = 0;
   bool success = false;
 
   // parse
@@ -563,8 +570,8 @@ static struct bif *parse_level0_xml(const char *xml,
         goto FAIL;
       }
 
+      // read joint values
       struct joint joint;
-      // read values
       PARSE_DOUBLE_ATTRIBUTE_OR_FAIL(joint_info, ATTR_OVERLAP_X,
                                      joint.offset_x);
       joint.offset_x *= -1;
@@ -577,9 +584,12 @@ static struct bif *parse_level0_xml(const char *xml,
       // check coordinates against direction, and get joint
       xmlChar *direction = xmlGetProp(joint_info, BAD_CAST ATTR_DIRECTION);
       bool ok;
+      bool direction_y = false;
       //g_debug("%s, tile1 %"PRId64" %"PRId64", tile2 %"PRId64" %"PRId64, (char *) direction, tile1_col, tile1_row, tile2_col, tile2_row);
       if (!xmlStrcmp(direction, BAD_CAST DIRECTION_RIGHT) || !xmlStrcmp(direction, BAD_CAST DIRECTION_LEFT)) {
-        // get left joint of right tile
+        // get rightmost tile; this works the same for RIGHT and LEFT because
+        // for LEFT a bad assumption is made in get_tile_coordinates that is
+        // counteracted here
         struct tile *tile =
           area->tiles[tile2_row * area->tiles_across + tile2_col];
         tile->offset_x = joint.offset_x;
@@ -590,6 +600,7 @@ static struct bif *parse_level0_xml(const char *xml,
           area->tiles[tile1_row * area->tiles_across + tile1_col];
         tile->offset_y = joint.offset_y;
         ok = (tile2_col == tile1_col && tile2_row == tile1_row - 1);
+        direction_y = true;
       } else {
         g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                     "Bad direction attribute \"%s\"", (char *) direction);
@@ -607,6 +618,15 @@ static struct bif *parse_level0_xml(const char *xml,
         goto FAIL;
       }
       xmlFree(direction);
+
+      // add to totals
+      if (direction_y) {
+        total_offset_y += joint.confidence * joint.offset_y;
+        total_y_weight += joint.confidence;
+      } else {
+        total_offset_x += joint.confidence * joint.offset_x;
+        total_x_weight += joint.confidence;
+      }
     }
     xmlXPathFreeObject(result);
     result = NULL;
@@ -628,8 +648,14 @@ FAIL:
   struct bif *bif = g_slice_new0(struct bif);
   bif->num_areas = area_array->len;
   bif->areas = (struct area **) g_ptr_array_free(area_array, false);
-  bif->tile_advance_x = tiff_tile_width;
-  bif->tile_advance_y = tiff_tile_height;
+
+  if (is_dp200) {
+    bif->tile_advance_x = tiff_tile_width;
+    bif->tile_advance_y = tiff_tile_height;
+  } else {
+    bif->tile_advance_x = tiff_tile_width + total_offset_x / total_x_weight;
+    bif->tile_advance_y = tiff_tile_height + total_offset_y / total_y_weight;
+  }
   //g_debug("advances: %g %g", bif->tile_advance_x, bif->tile_advance_y);
 
   // Fix area Y coordinates.  The Pos-Y read from the file is the distance
@@ -717,7 +743,7 @@ DONE:
 static struct _openslide_grid *create_bif_grid(openslide_t *osr,
                                                struct bif *bif,
                                                double downsample,
-                                               int64_t tile_w, int64_t tile_h) {
+                                               int64_t tile_w, int64_t tile_h, bool is_dp200) {
   double subtile_w = tile_w / downsample;
   double subtile_h = tile_h / downsample;
 
@@ -730,23 +756,29 @@ static struct _openslide_grid *create_bif_grid(openslide_t *osr,
   for (int32_t i = 0; i < bif->num_areas; i++) {
     struct area *area = bif->areas[i];
     //g_debug("ds %g area %d pos %"PRId64" %"PRId64" offset %g %g", downsample, i, area->x, area->y, offset_x, offset_y);
+
+    // cumulative offset_y for each column
     double offset_ys[area->tiles_across];
     for (int64_t col = 0; col < area->tiles_across; col++) {
       offset_ys[col] = 0;
     }
+
     for (int64_t row = 0; row < area->tiles_down; row++) {
+      // cumulative offset_x for this row
       double offset_x = 0;
       for (int64_t col = 0; col < area->tiles_across; col++) {
-        struct tile *tile = area->tiles[row * area->tiles_across + col];
-        offset_x += tile->offset_x;
-        offset_ys[col] += tile->offset_y;
+        if (is_dp200) {
+          // use the tile offsets only for DP 200 scans.
+          struct tile *tile = area->tiles[row * area->tiles_across + col];
+          offset_x += tile->offset_x;
+          offset_ys[col] += tile->offset_y;
+        }
         _openslide_grid_tilemap_add_tile(grid,
                                          area->start_col + col, area->start_row + row,
                                          (offset_x) / downsample,
                                          (offset_ys[col]) / downsample,
                                          subtile_w, subtile_h,
                                          NULL);
-
       }
     }
   }
@@ -796,6 +828,11 @@ static bool ventana_open(openslide_t *osr, const char *filename,
   if (!parse_initial_xml(osr, xml, err)) {
     goto FAIL;
   }
+
+  char * scanner_model = g_hash_table_lookup(osr->properties,
+                                             PROP_SCANNER_MODEL);
+  bool is_dp200 =
+    scanner_model && !strcmp(scanner_model, SCANNER_MODEL_DP_200);
 
   // walk directories
   int64_t next_level = 0;
@@ -851,7 +888,7 @@ static bool ventana_open(openslide_t *osr, const char *filename,
             goto FAIL;
           }
           // parse
-          bif = parse_level0_xml(xml, tiffl.tile_w, tiffl.tile_h, err);
+          bif = parse_level0_xml(xml, tiffl.tile_w, tiffl.tile_h, is_dp200, err);
           if (!bif) {
             goto FAIL;
           }
@@ -902,7 +939,7 @@ static bool ventana_open(openslide_t *osr, const char *filename,
       if (bif) {
         l->grid = create_bif_grid(osr, bif,
                                   downsample,
-                                  tiffl->tile_w, tiffl->tile_h);
+                                  tiffl->tile_w, tiffl->tile_h, is_dp200);
         l->subtiles_per_tile = downsample;
         // the format doesn't seem to record the level size, so make it
         // large enough for all the pixels
